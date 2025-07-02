@@ -35,6 +35,23 @@ async function htmlRewriterPlugin(fastify, opts) {
         $el.attr('content', `${delay}; url=${proxiedUrl}`);
       }
     });
+    $('style').each((_, el) => {
+      const $el = $(el);
+      const css = $el.html();
+
+      const rewrittenCss = css.replace(/url\(["']?(.*?)["']?\)/g, (match, url) => {
+        if (url.startsWith('data:') || url.startsWith('javascript:')) return match;
+
+        try {
+          const absoluteUrl = new URL(url, originalUrl).toString();
+          return `url("${assetProxyUrl}${encodeURIComponent(absoluteUrl)}")`;
+        } catch {
+          return match; // skip malformed URLs
+        }
+      });
+
+      $el.html(rewrittenCss);
+    });
     $('embed[src], object[data]').each((_, el) => {
       const $el = $(el);
       const attr = el.name === 'embed' ? 'src' : 'data';
