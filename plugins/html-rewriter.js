@@ -12,7 +12,7 @@ async function htmlRewriterPlugin(fastify, opts) {
       const orig = $(el).attr(attr);
       if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:')) return;
       const absoluteUrl = new URL(orig, originalUrl).toString();
-      if (el.name === 'a') {
+      if (el.name === 'a' || el.name === 'form') {
         $(el).attr(attr, '/proxy?url=' + encodeURIComponent(absoluteUrl));
       } else {
         $(el).attr(attr, '/asset?url=' + encodeURIComponent(absoluteUrl));
@@ -21,6 +21,14 @@ async function htmlRewriterPlugin(fastify, opts) {
 
     $('a[href]').each((_, el) => rewriteAttr(el, 'href'));
     $('link[href]').each((_, el) => rewriteAttr(el, 'href'));
+    $('form[action]').each((_, el) => {
+      const $el = $(el);
+      const orig = $el.attr('action');
+      if (!orig || orig.startsWith('javascript:') || orig.startsWith('data:')) return;
+      const absolute = new URL(orig, originalUrl).toString();
+      $el.attr('data-original-action', absolute);
+      $el.attr('action', '/proxy');
+    });
     $('script[src], img[src]').each((_, el) => rewriteAttr(el, 'src'));
     $('meta[http-equiv="refresh"]').each((_, el) => {
       const $el = $(el);
@@ -64,7 +72,7 @@ async function htmlRewriterPlugin(fastify, opts) {
       $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
     });
 
-    // Inject Ruffle config and fetch/XHR patch
+    // TODO: move all this junk into real js files or something
     const patchScript = `
   <script>
     window.RufflePlayer = window.RufflePlayer || {};
@@ -132,37 +140,26 @@ async function htmlRewriterPlugin(fastify, opts) {
         return new originalActiveXObject(progid);
       };
     }
+  </script>
+<script>
+  // Form Handling
+  document.addEventListener("DOMContentLoaded", function() {
+    document.querySelectorAll("form[data-original-action]").forEach(form => {
+      const absolute = form.getAttribute("data-original-action");
+      if (!absolute) return;
 
-    // Improved form handler
-    document.addEventListener("DOMContentLoaded", () => {
-      document.querySelectorAll("form").forEach(form => {
-        form.addEventListener("submit", event => {
-          event.preventDefault();
-          const params = new URLSearchParams(new FormData(form));
-          let action = form.action || location.href;
-          const absolute = new URL(action, window.location).toString();
-          const method = (form.method || "GET").toUpperCase();
-
-          if (method === "GET") {
-            const redirected = "${baseProxyUrl}" + encodeURIComponent(absolute + "?" + params.toString());
-            window.location.href = redirected;
-          } else {
-            // POST: do a fetch via the proxy and reload with returned page
-            fetch("${baseProxyUrl}" + encodeURIComponent(absolute), {
-              method: "POST",
-              body: params,
-              headers: { "Content-Type": "application/x-www-form-urlencoded" }
-            })
-              .then(resp => resp.text())
-              .then(html => document.open("text/html").write(html));
-          }
-        });
+      form.addEventListener("submit", function(e) {
+        e.preventDefault();
+        const params = new URLSearchParams(new FormData(form)).toString();
+        const fullUrl = absolute + (params ? "?" + params : "");
+        window.location.href = "/proxy?url=" + encodeURIComponent(fullUrl);
       });
     });
-  </script>
+  });
+</script>
   <script src="/public/ruffle/ruffle.js"></script>
   `;
-    $('body').append(patchScript);
+    $('head').append(patchScript);
 
     // Inject zoom + 4:3 container CSS
     $('head').append(`
