@@ -5,7 +5,7 @@ const { fileTypeFromBuffer } = require('file-type');
 const { LRUCache } = require('lru-cache');
 
 const assetCache = new LRUCache({
-  maxSize: 100 * 1024 * 1024, // 100 MB total
+  maxSize: 500 * 1024 * 1024, // 500 MB total
   ttl: 1000 * 60 * 60,    // 1 hour TTL
   sizeCalculation: (value, key) => value.length,
 });
