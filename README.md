@@ -5,6 +5,7 @@ This project is a web proxy server for Protoweb, enabling users to access archiv
 ## Features
 
 - Rewrites all links, images, scripts, and stylesheets to route through the proxy
+- FTP servers route through the proxy
 - Injects Ruffle to emulate Flash content
 - Scales and frames pages to simulate a legacy browsing experience (4:3 resolution)
 - Fastify-based architecture for performance and plugin flexibility
@@ -33,20 +34,6 @@ http://localhost:3000/proxy?url=http://www.inode.com
 - /proxy handles HTML rewriting and Ruffle injection
 - /asset streams binary/images/static content
 - Static files like Ruffle are served under /public/ruffle/
-
-## Directory Structure
-
-.
-├── plugins/
-│   ├── fetcher.js          # Fetch via proxy
-│   ├── html-rewriter.js    # Rewrites HTML to proxy all links
-│   └── asset-proxy.js      # Proxies binary files (images, .swf, etc.)
-├── routes/
-│   └── proxy.js            # Main page route handler
-├── public/
-│   └── ruffle/             # Ruffle runtime
-├── server.js               # Fastify app entry point
-└── package.json
 
 ## Requirements
 
