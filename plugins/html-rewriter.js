@@ -21,6 +21,20 @@ async function htmlRewriterPlugin(fastify, opts) {
     $('a[href]').each((_, el) => rewriteAttr(el, 'href'));
     $('link[href]').each((_, el) => rewriteAttr(el, 'href'));
     $('script[src], img[src]').each((_, el) => rewriteAttr(el, 'src'));
+    $('meta[http-equiv="refresh"]').each((_, el) => {
+      const $el = $(el);
+      const content = $el.attr('content');
+      if (!content) return;
+
+      const match = content.match(/^\s*\d+\s*;\s*url\s*=\s*(.+)$/i);
+      if (match) {
+        const originalUrl = match[1].trim().replace(/^['"]|['"]$/g, '');
+        const absoluteUrl = new URL(originalUrl, originalUrl).toString();
+        const proxiedUrl = baseProxyUrl + encodeURIComponent(absoluteUrl);
+        const delay = content.split(';')[0].trim();
+        $el.attr('content', `${delay}; url=${proxiedUrl}`);
+      }
+    });
     $('embed[src], object[data]').each((_, el) => {
       const $el = $(el);
       const attr = el.name === 'embed' ? 'src' : 'data';
@@ -77,7 +91,6 @@ async function htmlRewriterPlugin(fastify, opts) {
     padding: 0;
     height: 100vh;
     overflow: hidden;
-    background: #98bcd4; /* Example old-school pastel */
   }
 
   body {
@@ -98,7 +111,6 @@ async function htmlRewriterPlugin(fastify, opts) {
     overflow-y: auto;
     border: 6px solid #333;
     box-shadow: 0 0 20px rgba(0,0,0,0.7);
-    background: white;
     padding: 20px;
     box-sizing: border-box;
     scrollbar-width: thin;
