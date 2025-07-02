@@ -4,6 +4,7 @@ const cheerio = require('cheerio');
 async function htmlRewriterPlugin(fastify, opts) {
   fastify.decorate('rewriteHtml', async (html, originalUrl) => {
     const $ = cheerio.load(html);
+    const domainName = 'http://localhost';
     const baseProxyUrl = '/proxy?url=';
     const assetProxyUrl = '/asset?url=';
 
@@ -28,8 +29,8 @@ async function htmlRewriterPlugin(fastify, opts) {
 
       const match = content.match(/^\s*\d+\s*;\s*url\s*=\s*(.+)$/i);
       if (match) {
-        const originalUrl = match[1].trim().replace(/^['"]|['"]$/g, '');
-        const absoluteUrl = new URL(originalUrl, originalUrl).toString();
+        const urlPart = match[1].trim().replace(/^['"]|['"]$/g, '');
+        const absoluteUrl = new URL(urlPart, originalUrl).toString();
         const proxiedUrl = baseProxyUrl + encodeURIComponent(absoluteUrl);
         const delay = content.split(';')[0].trim();
         $el.attr('content', `${delay}; url=${proxiedUrl}`);
@@ -59,46 +60,109 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig) return;
 
       const absoluteUrl = new URL(orig, originalUrl).toString();
-      // const proxiedUrl = assetProxyUrl + encodeURIComponent(absoluteUrl);
-
       $el.attr(attr, absoluteUrl);
       $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
     });
 
-    if ($('embed[src$=".swf"], object[data$=".swf"]').length > 0) {
-      // Inject Ruffle config and fetch/XHR patch
-      const patchScript = `
-      <script>
-        window.RufflePlayer = window.RufflePlayer || {};
-        window.RufflePlayer.config = {
-          publicPath: "/public/ruffle/",
-          base: "${assetProxyUrl}"
-        };
+    // Inject Ruffle config and fetch/XHR patch
+    const patchScript = `
+  <script>
+    window.RufflePlayer = window.RufflePlayer || {};
+    window.RufflePlayer.config = {
+      publicPath: "/public/ruffle/",
+      base: "${assetProxyUrl}"
+    };
 
-        // Patch fetch
-        const originalFetch = window.fetch;
-        window.fetch = function(input, init) {
-          const url = typeof input === "string" ? input : input.url;
-          if (url && url.startsWith("http")) {
-            return originalFetch("${assetProxyUrl}" + encodeURIComponent(url), init);
-          }
-          return originalFetch(input, init);
-        };
+    const proxyUrl = "${assetProxyUrl}";
+    const originalDomain = new URL("${originalUrl}").origin;
 
-        // Patch XHR
-        const originalOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-          if (url && url.startsWith("http")) {
-            url = "${assetProxyUrl}" + encodeURIComponent(url);
-          }
-          return originalOpen.call(this, method, url, ...rest);
-        };
-      </script>
-      <script src="/public/ruffle/ruffle.js"></script>
-    `;
+    // Patch fetch for proxying, including warpstream hacks
+    const _fetch = window.fetch;
+    window.fetch = async function(resource, options) {
+      let resourceURL = new URL(resource instanceof Request ? resource.url : resource, window.location);
 
-      $('body').append(patchScript);
+      if (resourceURL.protocol === "blob:" || resourceURL.href.startsWith("${domainName}"))
+        return _fetch(resource, options);
+
+      // Warpstream hack: replace v=undefined/video_id=undefined with hardcoded id
+      let redirectURL = resourceURL.href;
+      if (
+        (redirectURL.includes("warpstream") || redirectURL.includes("warpstream.net")) &&
+        (redirectURL.includes("?v=undefined") || redirectURL.includes("?video_id=undefined"))
+      ) {
+        redirectURL = redirectURL.replace("?v=undefined", "?v=aP0yUqcyY18").replace("?video_id=undefined", "?video_id=aP0yUqcyY18");
+      }
+
+      // Proxy all HTTP requests
+      const proxied = proxyUrl + encodeURIComponent(redirectURL);
+
+      const response = await _fetch(proxied, options);
+
+      // Spoof URL for sitelocks
+      try {
+        Object.defineProperty(response, "url", { value: resourceURL.href });
+      } catch {}
+
+      return response;
+    };
+
+    // Patch XHR
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      if (url && !url.startsWith(proxyUrl) && url.startsWith("http")) {
+        url = proxyUrl + encodeURIComponent(url);
+      }
+      return originalOpen.call(this, method, url, ...rest);
+    };
+
+    // Intercept ActiveXObject (old IE)
+    if (window.ActiveXObject) {
+      const originalActiveXObject = window.ActiveXObject;
+      window.ActiveXObject = function(progid) {
+        if (progid.toLowerCase().includes("xmlhttp")) {
+          const xhr = new originalActiveXObject(progid);
+          const origOpen = xhr.open;
+          xhr.open = function(method, url, ...rest) {
+            const absolute = new URL(url, originalDomain).toString();
+            const proxied = proxyUrl + encodeURIComponent(absolute);
+            return origOpen.call(this, method, proxied, ...rest);
+          };
+          return xhr;
+        }
+        return new originalActiveXObject(progid);
+      };
     }
+
+    // Improved form handler
+    document.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll("form").forEach(form => {
+        form.addEventListener("submit", event => {
+          event.preventDefault();
+          const params = new URLSearchParams(new FormData(form));
+          let action = form.action || location.href;
+          const absolute = new URL(action, window.location).toString();
+          const method = (form.method || "GET").toUpperCase();
+
+          if (method === "GET") {
+            const redirected = "${baseProxyUrl}" + encodeURIComponent(absolute + "?" + params.toString());
+            window.location.href = redirected;
+          } else {
+            // POST: do a fetch via the proxy and reload with returned page
+            fetch("${baseProxyUrl}" + encodeURIComponent(absolute), {
+              method: "POST",
+              body: params,
+              headers: { "Content-Type": "application/x-www-form-urlencoded" }
+            })
+              .then(resp => resp.text())
+              .then(html => document.open("text/html").write(html));
+          }
+        });
+      });
+    });
+  </script>
+  <script src="/public/ruffle/ruffle.js"></script>
+  `;
+    $('body').append(patchScript);
 
     // Inject zoom + 4:3 container CSS
     $('head').append(`
@@ -111,8 +175,8 @@ async function htmlRewriterPlugin(fastify, opts) {
   }
 
   body {
-  font-family: "Times New Roman", "Tahoma", "Verdana", "Arial", sans-serif;
-}
+    font-family: "Times New Roman", "Tahoma", "Verdana", "Arial", sans-serif;
+  }
 
   #protoweb-outer {
     display: flex;
@@ -146,7 +210,7 @@ async function htmlRewriterPlugin(fastify, opts) {
     }
   }
 </style>
-  `);
+    `);
 
     // Wrap body content
     const bodyHtml = $('body').html();
