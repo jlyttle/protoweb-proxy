@@ -13,7 +13,7 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:') || orig.startsWith('mailto:')) return;
       const absoluteUrl = new URL(orig, originalUrl).toString();
       let rewrittenUrl;
-      if (el.name === 'a' || el.name === 'form') {
+      if (el.name === 'a' || el.name === 'form' || el.name === 'frame') {
         rewrittenUrl = domainName + '/proxy?url=' + encodeURIComponent(absoluteUrl);
         $(el).attr(attr, rewrittenUrl);
       } else {
@@ -25,6 +25,7 @@ async function htmlRewriterPlugin(fastify, opts) {
 
     $('a[href]').each((_, el) => rewriteAttr(el, 'href'));
     $('link[href]').each((_, el) => rewriteAttr(el, 'href'));
+    $('frame[src]').each((_, el) => rewriteAttr(el, 'src'));
     $('form[action]').each((_, el) => {
       const $el = $(el);
       const orig = $el.attr('action');
@@ -34,6 +35,7 @@ async function htmlRewriterPlugin(fastify, opts) {
       $el.attr('action', '/proxy');
       console.log(`[form[action] rewrite] form[action]: original='${orig}', absolute='${absolute}', rewritten='/proxy'`);
     });
+    $('body[background], td[background], tr[background], table[background]').each((_, el) => rewriteAttr(el, 'background'));
     $('script[src], img[src], input[src]').each((_, el) => rewriteAttr(el, 'src'));
     $('meta[http-equiv="refresh"]').each((_, el) => {
       const $el = $(el);
@@ -76,9 +78,10 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig) return;
 
       const absoluteUrl = new URL(orig, originalUrl).toString();
-      $el.attr(attr, absoluteUrl);
+      const proxiedUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+      $el.attr(attr, proxiedUrl);
       $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
-      console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}'`);
+      console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}', proxied='${proxiedUrl}'`);
     });
 
     // TODO: move all this junk into real js files or something
@@ -235,6 +238,44 @@ async function htmlRewriterPlugin(fastify, opts) {
 //     <div id="protoweb-frame">${bodyHtml}</div>
 //   </div>
 // `);
+
+    // Patch document.write and document.writeln to rewrite embed/bgsound src attributes
+    const patchDocumentWriteScript = `
+  <script>
+    var PROTOWEB_ORIGINAL_URL = "${originalUrl}";
+    (function() {
+      function rewriteMediaSrc(str) {
+        var rewritten = str.replace(/(<(?:embed|bgsound)[^>]*src\\s*=\\s*)(['\\"]?)([^'\\"> ]+)\\2/gi, function(match, prefix, quote, url) {
+          try {
+            var abs = new URL(url, PROTOWEB_ORIGINAL_URL).toString();
+            var proxied = '${domainName}/asset?url=' + encodeURIComponent(abs);
+            console.log('[document.write patch] Rewriting media src:', url, '->', proxied);
+            return prefix + quote + proxied + quote;
+          } catch {
+            return match;
+          }
+        });
+        if (rewritten !== str) {
+          console.log('[document.write patch] Rewrote string:', rewritten);
+        }
+        return rewritten;
+      }
+      var origWrite = document.write.bind(document);
+      document.write = function(str) {
+        console.log('[document.write patch] document.write called with:', str);
+        if (typeof str === 'string') str = rewriteMediaSrc(str);
+        return origWrite(str);
+      };
+      var origWriteln = document.writeln.bind(document);
+      document.writeln = function(str) {
+        console.log('[document.write patch] document.writeln called with:', str);
+        if (typeof str === 'string') str = rewriteMediaSrc(str);
+        return origWriteln(str);
+      };
+    })();
+  </script>
+  `;
+    $('head').prepend(patchDocumentWriteScript);
 
     return $.html();
   });
