@@ -2,6 +2,14 @@ const fastify = require('fastify')({ logger: true });
 const path = require('path');
 const fastifyStatic = require('@fastify/static');
 
+// Register CORS plugin
+fastify.register(require('@fastify/cors'), {
+  origin: true, // Allow all origins in development
+  credentials: true, // Allow credentials (cookies, authorization headers)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+});
+
 fastify.register(fastifyStatic, {
   root: path.join(__dirname, 'public'),
   prefix: '/public/', // so /public/ruffle/ruffle.js works
