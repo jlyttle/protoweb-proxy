@@ -29,6 +29,7 @@ async function assetProxyPlugin(fastify, opts) {
       '--silent',
       '--location',
       '--proxy', 'http://wayback.protoweb.org:7851',
+      '--user-agent', 'JSProtoBrowser',
       targetUrl
     ]);
 

@@ -66,6 +66,7 @@ async function fetcherPlugin(fastify, opts) {
         '--silent',
         '-i',
         '--proxy', 'http://wayback.protoweb.org:7851',
+        '--user-agent', 'JSProtoBrowser',
         url
       ]);
 

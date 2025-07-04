@@ -14,6 +14,7 @@ module.exports = async function (req, reply) {
           '--silent',
           '--head',
           '--proxy', 'http://wayback.protoweb.org:7851',
+          '--user-agent', 'JSProtoBrowser',
           newUrl
         ]);
         // Find the content-type header (case-insensitive)
