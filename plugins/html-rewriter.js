@@ -172,6 +172,103 @@ async function htmlRewriterPlugin(fastify, opts) {
         rewriteAndNavigate(url);
       };
     })();
+
+    // Patch popup windows and _target blank
+    (function() {
+      // Patch window.open
+      const originalWindowOpen = window.open;
+      window.open = function(url, name, features) {
+        if (url && typeof url === 'string') {
+          try {
+            const absoluteUrl = new URL(url, originalDomain).toString();
+            const proxiedUrl = '${domainName}/proxy?url=' + encodeURIComponent(absoluteUrl);
+            
+            // Parse features to extract width and height
+            let width = 800;
+            let height = 600;
+            if (features) {
+              const widthMatch = features.match(/width=(\d+)/);
+              const heightMatch = features.match(/height=(\d+)/);
+              if (widthMatch) width = parseInt(widthMatch[1]);
+              if (heightMatch) height = parseInt(heightMatch[1]);
+            }
+            
+            // Post message to parent window
+            window.parent.postMessage({
+              type: 'OPEN_POPUP',
+              url: proxiedUrl,
+              originalUrl: absoluteUrl,
+              name: name || '_blank',
+              width: width,
+              height: height,
+              features: features || ''
+            }, 'http://localhost:3001');
+            
+            console.log('[popup patch] Intercepted window.open:', url, '->', proxiedUrl, 'size:', width + 'x' + height);
+            
+            // Return null to prevent actual popup
+            return null;
+          } catch (e) {
+            console.log('[popup patch] Error processing window.open:', e);
+            return originalWindowOpen.call(this, url, name, features);
+          }
+        }
+        return originalWindowOpen.call(this, url, name, features);
+      };
+
+      // Patch _target blank links
+      document.addEventListener('click', function(e) {
+        const target = e.target.closest('a[target="_blank"]');
+        if (target) {
+          e.preventDefault();
+          const href = target.getAttribute('href');
+          if (href && !href.startsWith('javascript:') && !href.startsWith('mailto:') && !href.startsWith('#')) {
+            try {
+              const absoluteUrl = new URL(href, originalDomain).toString();
+              const proxiedUrl = '${domainName}/proxy?url=' + encodeURIComponent(absoluteUrl);
+              
+              // Post message to parent window
+              window.parent.postMessage({
+                type: 'OPEN_POPUP',
+                url: proxiedUrl,
+                originalUrl: absoluteUrl,
+                name: '_blank',
+                width: 800,
+                height: 600,
+                features: 'width=800,height=600'
+              }, 'http://localhost:3001');
+              
+              console.log('[popup patch] Intercepted _target blank link:', href, '->', proxiedUrl);
+            } catch (e) {
+              console.log('[popup patch] Error processing _target blank link:', e);
+              // Fallback to original behavior
+              window.open(href, '_blank');
+            }
+          }
+        }
+      }, true);
+
+      // Patch onclick handlers that might open popups
+      const originalAddEventListener = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (type === 'click' && typeof listener === 'function') {
+          const wrappedListener = function(event) {
+            try {
+              // Check if the listener might open a popup
+              const result = listener.call(this, event);
+              if (result === false) return false; // Prevent default
+              
+              // If the element has target="_blank" or onclick contains window.open, we've already handled it
+              return result;
+            } catch (e) {
+              return listener.call(this, event);
+            }
+          };
+          return originalAddEventListener.call(this, type, wrappedListener, options);
+        }
+        return originalAddEventListener.call(this, type, listener, options);
+      };
+    })();
   </script>
 <script>
   // Form Handling
@@ -195,8 +292,10 @@ async function htmlRewriterPlugin(fastify, opts) {
 
     // Special handling for .pls files from shoutcast.com
     if (originalUrl.includes('shoutcast.com') && originalUrl.endsWith('.pls')) {
+      console.log('Redirecting shoutcast playlist to webamp');
       // Check if the content looks like a playlist file
       const bodyText = $('body').text() || html;
+      console.log('Body text:', bodyText);
       if (bodyText.includes('[playlist]') && bodyText.includes('File1=')) {
         // Extract stream URL from File1= line
         const fileMatch = bodyText.match(/File1=(.+)/);
