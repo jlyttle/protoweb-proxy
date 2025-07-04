@@ -11,9 +11,22 @@ module.exports = async function (fastify, opts) {
     try {
       const { statusCode, headers, body } = await fastify.fetchRemote(targetUrl);
 
+      // Handle redirects (3xx)
+      if (statusCode >= 300 && statusCode < 400 && headers['location']) {
+        // Rewrite the Location header to go through the proxy
+        let redirectUrl = headers['location'];
+        // If the redirect is relative, resolve it against the original URL
+        try {
+          redirectUrl = new URL(redirectUrl, targetUrl).toString();
+        } catch {}
+        const proxiedLocation = `/proxy?url=${encodeURIComponent(redirectUrl)}`;
+        reply.header('location', proxiedLocation);
+        reply.status(statusCode);
+        return reply.send();
+      }
+
       // For HTML, parse and rewrite content
       if (wantsHtml || headers['content-type']?.includes('text/html')) {
-        //const rawHtml = await body.text();
         const rewritten = await fastify.rewriteHtml(body, targetUrl);
         reply.header('content-type', 'text/html');
         return reply.send(rewritten);
