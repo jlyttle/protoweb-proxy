@@ -20,6 +20,7 @@ fastify.register(require('./plugins/html-rewriter'));
 fastify.register(require('./plugins/asset-proxy'));
 
 fastify.register(require('./routes/proxy'));
+fastify.setNotFoundHandler(require('./routes/notfound'));
 
 console.log('Running with Node.js version:', process.version);
 
