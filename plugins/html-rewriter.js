@@ -4,19 +4,23 @@ const cheerio = require('cheerio');
 async function htmlRewriterPlugin(fastify, opts) {
   fastify.decorate('rewriteHtml', async (html, originalUrl) => {
     const $ = cheerio.load(html);
-    const domainName = 'http://localhost';
+    const domainName = 'http://localhost:3000';
     const baseProxyUrl = '/proxy?url=';
     const assetProxyUrl = '/asset?url=';
 
     function rewriteAttr(el, attr) {
       const orig = $(el).attr(attr);
-      if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:')) return;
+      if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:') || orig.startsWith('mailto:')) return;
       const absoluteUrl = new URL(orig, originalUrl).toString();
+      let rewrittenUrl;
       if (el.name === 'a' || el.name === 'form') {
-        $(el).attr(attr, '/proxy?url=' + encodeURIComponent(absoluteUrl));
+        rewrittenUrl = domainName + '/proxy?url=' + encodeURIComponent(absoluteUrl);
+        $(el).attr(attr, rewrittenUrl);
       } else {
-        $(el).attr(attr, '/asset?url=' + encodeURIComponent(absoluteUrl));
+        rewrittenUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+        $(el).attr(attr, rewrittenUrl);
       }
+      console.log(`[rewriteAttr] ${el.name} [${attr}]: original='${orig}', rewritten='${rewrittenUrl}'`);
     }
 
     $('a[href]').each((_, el) => rewriteAttr(el, 'href'));
@@ -28,8 +32,9 @@ async function htmlRewriterPlugin(fastify, opts) {
       const absolute = new URL(orig, originalUrl).toString();
       $el.attr('data-original-action', absolute);
       $el.attr('action', '/proxy');
+      console.log(`[form[action] rewrite] form[action]: original='${orig}', absolute='${absolute}', rewritten='/proxy'`);
     });
-    $('script[src], img[src]').each((_, el) => rewriteAttr(el, 'src'));
+    $('script[src], img[src], input[src]').each((_, el) => rewriteAttr(el, 'src'));
     $('meta[http-equiv="refresh"]').each((_, el) => {
       const $el = $(el);
       const content = $el.attr('content');
@@ -42,6 +47,7 @@ async function htmlRewriterPlugin(fastify, opts) {
         const proxiedUrl = baseProxyUrl + encodeURIComponent(absoluteUrl);
         const delay = content.split(';')[0].trim();
         $el.attr('content', `${delay}; url=${proxiedUrl}`);
+        console.log(`[meta refresh] original='${urlPart}', absolute='${absoluteUrl}', rewritten='${proxiedUrl}'`);
       }
     });
     $('style').each((_, el) => {
@@ -53,7 +59,9 @@ async function htmlRewriterPlugin(fastify, opts) {
 
         try {
           const absoluteUrl = new URL(url, originalUrl).toString();
-          return `url("${assetProxyUrl}${encodeURIComponent(absoluteUrl)}")`;
+          const rewrittenUrl = `${assetProxyUrl}${encodeURIComponent(absoluteUrl)}`;
+          console.log(`[style url()] original='${url}', absolute='${absoluteUrl}', rewritten='${rewrittenUrl}'`);
+          return `url("${rewrittenUrl}")`;
         } catch {
           return match; // skip malformed URLs
         }
@@ -70,6 +78,7 @@ async function htmlRewriterPlugin(fastify, opts) {
       const absoluteUrl = new URL(orig, originalUrl).toString();
       $el.attr(attr, absoluteUrl);
       $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
+      console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}'`);
     });
 
     // TODO: move all this junk into real js files or something
@@ -140,6 +149,26 @@ async function htmlRewriterPlugin(fastify, opts) {
         return new originalActiveXObject(progid);
       };
     }
+
+    // Proxy window.location navigation
+    (function() {
+      function rewriteAndNavigate(url) {
+        try {
+          var abs = new URL(url, window.location.href).toString();
+          window.location.assign('${domainName}/proxy?url=' + encodeURIComponent(abs));
+        } catch (e) {
+          window.location.assign(url); // fallback
+        }
+      }
+      var origAssign = window.location.assign.bind(window.location);
+      window.location.assign = function(url) {
+        rewriteAndNavigate(url);
+      };
+      var origReplace = window.location.replace.bind(window.location);
+      window.location.replace = function(url) {
+        rewriteAndNavigate(url);
+      };
+    })();
   </script>
 <script>
   // Form Handling
@@ -157,65 +186,55 @@ async function htmlRewriterPlugin(fastify, opts) {
     });
   });
 </script>
-  <script src="/public/ruffle/ruffle.js"></script>
+  <script src="${domainName}/public/ruffle/ruffle.js"></script>
   `;
     $('head').append(patchScript);
 
-    // Inject zoom + 4:3 container CSS
-    $('head').append(`
-<style id="protoweb-style">
-  html, body {
-    margin: 0;
-    padding: 0;
-    height: 100vh;
-    overflow: hidden;
-  }
-
-  body {
-    font-family: "Times New Roman", "Tahoma", "Verdana", "Arial", sans-serif;
-  }
-
-  #protoweb-outer {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    overflow: hidden;
-  }
-
-  #protoweb-frame {
-    width: 1024px;
-    height: 768px;
-    overflow-y: auto;
-    border: 6px solid #333;
-    box-shadow: 0 0 20px rgba(0,0,0,0.7);
-    padding: 20px;
-    box-sizing: border-box;
-    scrollbar-width: thin;
-  }
-
-  @media (max-width: 1024px) {
-    #protoweb-frame {
-      transform: scale(0.85);
-      transform-origin: top center;
+    // Special handling for .pls files from shoutcast.com
+    if (originalUrl.includes('shoutcast.com') && originalUrl.endsWith('.pls')) {
+      // Check if the content looks like a playlist file
+      const bodyText = $('body').text() || html;
+      if (bodyText.includes('[playlist]') && bodyText.includes('File1=')) {
+        // Extract stream URL from File1= line
+        const fileMatch = bodyText.match(/File1=(.+)/);
+        if (fileMatch) {
+          const streamUrl = fileMatch[1].trim();
+          
+          // Extract station name from Title1= line if available
+          const titleMatch = bodyText.match(/Title1=(.+)/);
+          const stationName = titleMatch ? titleMatch[1].trim() : 'Unknown Station';
+          
+          // Replace the entire body content with our script
+          const plsScript = `
+    <script>
+      // Post message to parent window
+      window.parent.postMessage({
+        type: 'LOAD_STREAM',
+        streamUrl: '${streamUrl}',
+        stationName: '${stationName}'
+      }, 'http://localhost:3001');
+      
+      // Go back to previous page
+      window.history.back();
+    </script>
+    <p>Loading stream: ${stationName}</p>
+    <p>Redirecting back...</p>`;
+          
+          $('body').html(plsScript);
+        }
+      }
     }
-  }
 
-  @media (max-width: 768px) {
-    #protoweb-frame {
-      transform: scale(0.65);
-    }
-  }
-</style>
-    `);
+    // $('head').append('<link rel="stylesheet" href="https://unpkg.com/@sakun/system.css" />');
+    // $('head').append('<link rel="stylesheet" href="https://unpkg.com/98.css@0.1.4/build/98.css" />');
 
     // Wrap body content
-    const bodyHtml = $('body').html();
-    $('body').html(`
-  <div id="protoweb-outer">
-    <div id="protoweb-frame">${bodyHtml}</div>
-  </div>
-`);
+//     const bodyHtml = $('body').html();
+//     $('body').html(`
+//   <div id="protoweb-outer">
+//     <div id="protoweb-frame">${bodyHtml}</div>
+//   </div>
+// `);
 
     return $.html();
   });
