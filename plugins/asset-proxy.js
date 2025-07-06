@@ -10,12 +10,15 @@ const assetCache = new LRUCache({
   sizeCalculation: (value, key) => value.length,
 });
 
+// Maximum file size to cache (5MB)
+const MAX_CACHE_SIZE = 5 * 1024 * 1024;
+
 async function assetProxyPlugin(fastify, opts) {
   fastify.get('/asset', async (req, reply) => {
     const targetUrl = req.query.url;
     if (!targetUrl) return reply.code(400).send('Missing URL');
 
-    // Try in-memory cache
+    // Try in-memory cache for small files
     if (assetCache.has(targetUrl)) {
       const buffer = assetCache.get(targetUrl);
       const type = await fileTypeFromBuffer(buffer);
@@ -24,36 +27,95 @@ async function assetProxyPlugin(fastify, opts) {
       return reply.send(buffer);
     }
 
-    // Fetch via curl
+    // Fetch via curl with headers to get content length
     const curl = spawn('curl', [
       '--silent',
       '--location',
+      '--head',
       '--proxy', 'http://wayback.protoweb.org:7851',
       '--user-agent', 'JSProtoBrowser',
       targetUrl
     ]);
 
-    const chunks = [];
-    curl.stdout.on('data', chunk => chunks.push(chunk));
+    let headerOutput = '';
+    curl.stdout.on('data', chunk => {
+      headerOutput += chunk.toString();
+    });
 
-    const [code] = await once(curl, 'close');
-
-    if (code !== 0) {
-      req.log.error(`curl exited with code ${code}`);
+    const [headCode] = await once(curl, 'close');
+    
+    if (headCode !== 0) {
+      req.log.error(`curl head exited with code ${headCode}`);
       return reply.code(502).send('Curl failed');
     }
 
-    try {
-      const buffer = Buffer.concat(chunks);
-      assetCache.set(targetUrl, buffer); // Store in cache
+    // Parse content length and type from headers
+    const contentLengthMatch = headerOutput.match(/content-length:\s*(\d+)/i);
+    const contentLength = contentLengthMatch ? parseInt(contentLengthMatch[1], 10) : null;
+    
+    const contentTypeMatch = headerOutput.match(/content-type:\s*([^\r\n]+)/i);
+    const contentType = contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream';
+    
+    // Check if file is too large to cache
+    // If no content length, assume it's small enough to cache
+    const shouldCache = !contentLength || (contentLength && contentLength <= MAX_CACHE_SIZE);
 
-      const type = await fileTypeFromBuffer(buffer);
+    if (shouldCache) {
+      // For small files, buffer and cache
+      const curlFetch = spawn('curl', [
+        '--silent',
+        '--location',
+        '--proxy', 'http://wayback.protoweb.org:7851',
+        '--user-agent', 'JSProtoBrowser',
+        targetUrl
+      ]);
+
+      const chunks = [];
+      curlFetch.stdout.on('data', chunk => chunks.push(chunk));
+
+      const [fetchCode] = await once(curlFetch, 'close');
+
+      if (fetchCode !== 0) {
+        req.log.error(`curl fetch exited with code ${fetchCode}`);
+        return reply.code(502).send('Curl failed');
+      }
+
+      try {
+        const buffer = Buffer.concat(chunks);
+        assetCache.set(targetUrl, buffer); // Store in cache
+
+        const type = await fileTypeFromBuffer(buffer);
+        reply.header('X-Cache-Hit', 'false');
+        reply.header('Content-Type', type?.mime || 'application/octet-stream');
+        return reply.send(buffer);
+      } catch (err) {
+        req.log.error(err, 'Error in processing asset');
+        return reply.code(500).send('Asset processing error');
+      }
+    } else {
+      // For large files, stream directly
+      const curlStream = spawn('curl', [
+        '--silent',
+        '--location',
+        '--proxy', 'http://wayback.protoweb.org:7851',
+        '--user-agent', 'JSProtoBrowser',
+        '--output', '-',
+        targetUrl
+      ]);
+
       reply.header('X-Cache-Hit', 'false');
-      reply.header('Content-Type', type?.mime || 'application/octet-stream');
-      return reply.send(buffer);
-    } catch (err) {
-      req.log.error(err, 'Error in processing asset');
-      return reply.code(500).send('Asset processing error');
+      reply.header('X-Streaming', 'true');
+      if (contentType) reply.header('Content-Type', contentType);
+
+      // Cleanup function to kill curl process
+      const cleanup = () => {
+        curlStream.kill();
+      };
+      req.raw.on('close', cleanup);
+      curlStream.on('close', cleanup);
+      curlStream.on('error', cleanup);
+
+      return reply.send(curlStream.stdout);
     }
   });
 }
