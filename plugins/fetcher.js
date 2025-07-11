@@ -32,7 +32,17 @@ function parseCurlResponse(output, defaultStatus = 200) {
     if (idx !== -1) {
       const key = line.slice(0, idx).trim().toLowerCase();
       const value = line.slice(idx + 1).trim();
-      headers[key] = value;
+      
+      // Handle multiple values for the same header (like set-cookie)
+      if (headers[key]) {
+        if (Array.isArray(headers[key])) {
+          headers[key].push(value);
+        } else {
+          headers[key] = [headers[key], value];
+        }
+      } else {
+        headers[key] = value;
+      }
     }
   }
   

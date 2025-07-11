@@ -35,7 +35,15 @@ module.exports = async function (fastify, opts) {
       }
 
       // For all other content, just stream as-is
-      reply.headers(headers);
+      // Set all headers from the proxied response
+      for (const [key, value] of Object.entries(headers)) {
+        if (Array.isArray(value)) {
+          // For repeated headers like set-cookie, set each value
+          value.forEach(v => reply.header(key, v));
+        } else {
+          reply.header(key, value);
+        }
+      }
       reply.status(statusCode);
       return reply.send(body);
     } catch (err) {
@@ -85,7 +93,15 @@ module.exports = async function (fastify, opts) {
         return reply.send(rewritten);
       }
 
-      reply.headers(headers);
+      // Set all headers from the proxied response
+      for (const [key, value] of Object.entries(headers)) {
+        if (Array.isArray(value)) {
+          // For repeated headers like set-cookie, set each value
+          value.forEach(v => reply.header(key, v));
+        } else {
+          reply.header(key, value);
+        }
+      }
       reply.status(statusCode);
       return reply.send(responseBody);
     } catch (err) {

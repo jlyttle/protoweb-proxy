@@ -56,6 +56,28 @@ async function assetProxyPlugin(fastify, opts) {
     const contentTypeMatch = headerOutput.match(/content-type:\s*([^\r\n]+)/i);
     const contentType = contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream';
     
+    // Parse all headers from the curl response
+    const allHeaders = {};
+    const headerLines = headerOutput.split(/\r?\n/);
+    for (const line of headerLines) {
+      const idx = line.indexOf(':');
+      if (idx !== -1) {
+        const key = line.slice(0, idx).trim().toLowerCase();
+        const value = line.slice(idx + 1).trim();
+        
+        // Handle multiple values for the same header (like set-cookie)
+        if (allHeaders[key]) {
+          if (Array.isArray(allHeaders[key])) {
+            allHeaders[key].push(value);
+          } else {
+            allHeaders[key] = [allHeaders[key], value];
+          }
+        } else {
+          allHeaders[key] = value;
+        }
+      }
+    }
+    
     // Check if file is too large to cache
     // If no content length, assume it's small enough to cache
     const shouldCache = !contentLength || (contentLength && contentLength <= MAX_CACHE_SIZE);
@@ -86,6 +108,17 @@ async function assetProxyPlugin(fastify, opts) {
 
         const type = await fileTypeFromBuffer(buffer);
         reply.header('X-Cache-Hit', 'false');
+        
+        // Set all headers from the proxied response
+        for (const [key, value] of Object.entries(allHeaders)) {
+          if (Array.isArray(value)) {
+            // For repeated headers like set-cookie, set each value
+            value.forEach(v => reply.header(key, v));
+          } else {
+            reply.header(key, value);
+          }
+        }
+        
         reply.header('Content-Type', type?.mime || 'application/octet-stream');
         return reply.send(buffer);
       } catch (err) {
@@ -106,6 +139,17 @@ async function assetProxyPlugin(fastify, opts) {
       reply.header('X-Cache-Hit', 'false');
       reply.header('X-Streaming', 'true');
       reply.header('Connection', 'close');
+      
+      // Set all headers from the proxied response
+      for (const [key, value] of Object.entries(allHeaders)) {
+        if (Array.isArray(value)) {
+          // For repeated headers like set-cookie, set each value
+          value.forEach(v => reply.header(key, v));
+        } else {
+          reply.header(key, value);
+        }
+      }
+      
       if (contentType) reply.header('Content-Type', contentType);
       reply.header('Content-Length', contentLength);
 
