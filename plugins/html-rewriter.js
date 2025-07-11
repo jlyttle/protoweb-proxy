@@ -13,10 +13,21 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:') || orig.startsWith('mailto:')) return;
       const absoluteUrl = new URL(orig, originalUrl).toString();
       let rewrittenUrl;
+      
+      // Check if URL has a file extension (likely an asset)
+      const hasFileExtension = /\.(?:[a-z0-9]{1,5})$/i.test(absoluteUrl);
+      // const isFtpPage = originalUrl.toLowerCase().startsWith('ftp://');
+      
       if (el.name === 'a' || el.name === 'form' || el.name === 'frame') {
-        rewrittenUrl = domainName + '/proxy?url=' + encodeURIComponent(absoluteUrl);
+        // For links, forms, and frames, use /proxy unless it's clearly an asset
+        if (hasFileExtension && !absoluteUrl.includes('?') && !absoluteUrl.includes('#')) {
+          rewrittenUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+        } else {
+          rewrittenUrl = domainName + '/proxy?url=' + encodeURIComponent(absoluteUrl);
+        }
         $(el).attr(attr, rewrittenUrl);
       } else {
+        // For other elements (img, script, etc.), always use /asset
         rewrittenUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
         $(el).attr(attr, rewrittenUrl);
       }

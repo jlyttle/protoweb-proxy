@@ -14,6 +14,18 @@ const assetCache = new LRUCache({
 const MAX_CACHE_SIZE = 5 * 1024 * 1024;
 
 async function assetProxyPlugin(fastify, opts) {
+  // Helper function to extract filename from URL
+  function getFilenameFromUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const filename = pathname.split('/').pop();
+      return filename || 'download';
+    } catch {
+      return 'download';
+    }
+  }
+
   fastify.get('/asset', async (req, reply) => {
     const targetUrl = req.query.url;
     if (!targetUrl) return reply.code(400).send('Missing URL');
@@ -120,6 +132,33 @@ async function assetProxyPlugin(fastify, opts) {
         }
         
         reply.header('Content-Type', type?.mime || 'application/octet-stream');
+        
+        // Set Content-Disposition for downloads only if not already set
+        if (!allHeaders['content-disposition']) {
+          const downloadTypes = [
+            'application/octet-stream',
+            'application/pdf',
+            'application/zip',
+            'application/x-zip-compressed',
+            'application/x-rar-compressed',
+            'application/x-executable',
+            'application/x-msdownload',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          ];
+          
+          const contentType = allHeaders['content-type'] || type?.mime || 'application/octet-stream';
+          const isFtpUrl = targetUrl.toLowerCase().startsWith('ftp://');
+          const isDownloadType = downloadTypes.some(t => contentType.includes(t));
+          
+          if (isDownloadType || isFtpUrl) {
+            const filename = getFilenameFromUrl(targetUrl);
+            reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+          }
+        }
+        
         return reply.send(buffer);
       } catch (err) {
         req.log.error(err, 'Error in processing asset');
@@ -152,6 +191,32 @@ async function assetProxyPlugin(fastify, opts) {
       
       if (contentType) reply.header('Content-Type', contentType);
       reply.header('Content-Length', contentLength);
+      
+      // Set Content-Disposition for downloads only if not already set
+      if (!allHeaders['content-disposition']) {
+        const downloadTypes = [
+          'application/octet-stream',
+          'application/pdf',
+          'application/zip',
+          'application/x-zip-compressed',
+          'application/x-rar-compressed',
+          'application/x-executable',
+          'application/x-msdownload',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ];
+        
+        const contentType = allHeaders['content-type'] || contentType || 'application/octet-stream';
+        const isFtpUrl = targetUrl.toLowerCase().startsWith('ftp://');
+        const isDownloadType = downloadTypes.some(t => contentType.includes(t));
+        
+        if (isDownloadType || isFtpUrl) {
+          const filename = getFilenameFromUrl(targetUrl);
+          reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+        }
+      }
 
       const cleanup = () => {
         if (!curlStream.killed) {
