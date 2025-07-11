@@ -29,8 +29,20 @@ module.exports = async function (fastify, opts) {
 
       // For HTML, parse and rewrite content
       if (wantsHtml || headers['content-type']?.includes('text/html')) {
-        const rewritten = await fastify.rewriteHtml(body, targetUrl);
-        reply.header('content-type', 'text/html');
+        // Extract charset from content-type header
+        let charset = undefined;
+        const ct = headers['content-type'];
+        if (ct) {
+          const match = ct.match(/charset=([^;\s]+)/i);
+          if (match) charset = match[1];
+        }
+        const rewritten = await fastify.rewriteHtml(body, targetUrl, charset);
+        // Set content-type with charset if available
+        if (charset) {
+          reply.header('content-type', `text/html; charset=${charset}`);
+        } else {
+          reply.header('content-type', 'text/html; charset=utf-8');
+        }
         return reply.send(rewritten);
       }
 
@@ -88,8 +100,20 @@ module.exports = async function (fastify, opts) {
       }
 
       if (wantsHtml || headers['content-type']?.includes('text/html')) {
-        const rewritten = await fastify.rewriteHtml(responseBody, targetUrl);
-        reply.header('content-type', 'text/html');
+        // Extract charset from content-type header
+        let charset = undefined;
+        const ct = headers['content-type'];
+        if (ct) {
+          const match = ct.match(/charset=([^;\s]+)/i);
+          if (match) charset = match[1];
+        }
+        const rewritten = await fastify.rewriteHtml(responseBody, targetUrl, charset);
+        // Set content-type with charset if available
+        if (charset) {
+          reply.header('content-type', `text/html; charset=${charset}`);
+        } else {
+          reply.header('content-type', 'text/html');
+        }
         return reply.send(rewritten);
       }
 

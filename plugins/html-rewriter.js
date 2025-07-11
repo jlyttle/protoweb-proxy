@@ -2,11 +2,34 @@ const fp = require('fastify-plugin');
 const cheerio = require('cheerio');
 
 async function htmlRewriterPlugin(fastify, opts) {
-  fastify.decorate('rewriteHtml', async (html, originalUrl) => {
+  fastify.decorate('rewriteHtml', async (html, originalUrl, charset) => {
     const $ = cheerio.load(html);
     const domainName = 'http://localhost:3000';
     const baseProxyUrl = '/proxy?url=';
     const assetProxyUrl = '/asset?url=';
+
+    // Ensure correct <meta charset> or <meta http-equiv> tag
+    if (charset) {
+      let found = false;
+      $('meta').each((_, el) => {
+        const $el = $(el);
+        const httpEquiv = $el.attr('http-equiv');
+        const metaCharset = $el.attr('charset');
+        if (metaCharset) {
+          $el.attr('charset', charset);
+          found = true;
+        } else if (httpEquiv && httpEquiv.toLowerCase() === 'content-type') {
+          let content = $el.attr('content') || '';
+          content = content.replace(/charset=([^;\s]+)/i, `charset=${charset}`);
+          $el.attr('content', content);
+          found = true;
+        }
+      });
+      if (!found) {
+        // Insert <meta charset=...> at the start of <head>
+        $('head').prepend(`<meta charset="${charset}">`);
+      }
+    }
 
     function rewriteAttr(el, attr) {
       const orig = $(el).attr(attr);
