@@ -105,13 +105,22 @@ async function assetProxyPlugin(fastify, opts) {
 
       reply.header('X-Cache-Hit', 'false');
       reply.header('X-Streaming', 'true');
+      reply.header('Connection', 'close');
       if (contentType) reply.header('Content-Type', contentType);
+      reply.header('Content-Length', contentLength);
 
-      // Cleanup function to kill curl process
       const cleanup = () => {
-        curlStream.kill();
+        if (!curlStream.killed) {
+          curlStream.kill('SIGKILL');  // immediate termination
+          console.log(`Curl stream forcibly killed for ${targetUrl}`);
+        }
+        if (!reply.raw.destroyed) reply.raw.destroy();
       };
+
       req.raw.on('close', cleanup);
+      req.raw.on('aborted', cleanup);
+      reply.raw.on('close', cleanup);
+      reply.raw.on('aborted', cleanup);
       curlStream.on('close', cleanup);
       curlStream.on('error', cleanup);
 

@@ -93,6 +93,33 @@ async function htmlRewriterPlugin(fastify, opts) {
       base: "${assetProxyUrl}"
     };
 
+    // Clean up Ruffle/Flash on navigation (aggressive)
+    function cleanupRuffle() {
+      // Destroy/remove all ruffle-player, object, and embed elements
+      document.querySelectorAll('object, embed, ruffle-player').forEach(el => {
+        try { if (typeof el.destroy === 'function') el.destroy(); } catch(e){}
+        try { while (el.firstChild) el.removeChild(el.firstChild); } catch(e){}
+        try { el.src = ''; } catch(e){}
+        try { el.data = ''; } catch(e){}
+        try { if (el.remove) el.remove(); } catch(e){}
+      });
+      // Destroy all active Ruffle players if possible
+      if (window.RufflePlayer && window.RufflePlayer.active_players) {
+        try {
+          window.RufflePlayer.active_players.forEach(player => {
+            if (typeof player.destroy === 'function') player.destroy();
+          });
+        } catch(e){}
+      }
+      // Nullify RufflePlayer global
+      try { window.RufflePlayer = null; } catch(e){}
+    }
+    window.addEventListener('beforeunload', cleanupRuffle);
+    window.addEventListener('pagehide', cleanupRuffle);
+    window.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'hidden') cleanupRuffle();
+    });
+
     const proxyUrl = "${assetProxyUrl}";
     const originalDomain = new URL("${originalUrl}").origin;
 
