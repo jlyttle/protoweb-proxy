@@ -297,22 +297,49 @@ async function htmlRewriterPlugin(fastify, opts) {
       };
     })();
   </script>
-<script>
-  // Form Handling
-  document.addEventListener("DOMContentLoaded", function() {
-    document.querySelectorAll("form[data-original-action]").forEach(form => {
-      const absolute = form.getAttribute("data-original-action");
-      if (!absolute) return;
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      document.querySelectorAll("form[data-original-action]").forEach(form => {
+        const absolute = form.getAttribute("data-original-action");
+        if (!absolute) return;
 
-      form.addEventListener("submit", function(e) {
-        e.preventDefault();
-        const params = new URLSearchParams(new FormData(form)).toString();
-        const fullUrl = absolute + (params ? "?" + params : "");
-        window.location.href = "/proxy?url=" + encodeURIComponent(fullUrl);
+        form.addEventListener("submit", function(e) {
+          e.preventDefault();
+          const method = (form.method || "get").toLowerCase();
+          const params = new URLSearchParams(new FormData(form)).toString();
+          if (method === "post") {
+            fetch("/proxy?url=" + encodeURIComponent(absolute), {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+              },
+              body: params,
+              credentials: "same-origin"
+            })
+            .then(async response => {
+              // If HTML, replace document; otherwise, handle as blob/download
+              const contentType = response.headers.get("content-type") || "";
+              if (contentType.includes("text/html")) {
+                const text = await response.text();
+                document.open();
+                document.write(text);
+                document.close();
+              } else {
+                // For non-HTML, try to download or display
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                window.location.href = url;
+              }
+            });
+          } else {
+            // GET: redirect as before
+            const fullUrl = absolute + (params ? "?" + params : "");
+            window.location.href = "/proxy?url=" + encodeURIComponent(fullUrl);
+          }
+        });
       });
     });
-  });
-</script>
+  </script>
   <script src="${domainName}/public/ruffle/ruffle.js"></script>
   `;
     $('head').append(patchScript);

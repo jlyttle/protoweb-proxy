@@ -2,6 +2,8 @@ const fastify = require('fastify')({ logger: true });
 const path = require('path');
 const fastifyStatic = require('@fastify/static');
 
+fastify.register(require('@fastify/formbody'));
+
 // Register CORS plugin
 fastify.register(require('@fastify/cors'), {
   origin: true, // Allow all origins in development

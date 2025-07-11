@@ -9,7 +9,9 @@ module.exports = async function (fastify, opts) {
     const wantsHtml = acceptHeader.includes('text/html');
 
     try {
-      const { statusCode, headers, body } = await fastify.fetchRemote(targetUrl);
+      const { statusCode, headers, body } = await fastify.fetchRemote(targetUrl, {
+        headers: req.headers
+      });
 
       // Handle redirects (3xx)
       if (statusCode >= 300 && statusCode < 400 && headers['location']) {
@@ -36,6 +38,56 @@ module.exports = async function (fastify, opts) {
       reply.headers(headers);
       reply.status(statusCode);
       return reply.send(body);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send('Proxy error');
+    }
+  });
+
+  fastify.post('/proxy', async (req, reply) => {
+    const targetUrl = req.query.url;
+    if (!targetUrl) {
+      return reply.code(400).send('Missing URL');
+    }
+
+    const acceptHeader = req.headers.accept || '';
+    const wantsHtml = acceptHeader.includes('text/html');
+
+    // Serialize body if urlencoded
+    const isUrlEncoded = req.headers['content-type'] && req.headers['content-type'].includes('application/x-www-form-urlencoded');
+    let body = req.body;
+    if (isUrlEncoded && typeof body === 'object' && body !== null) {
+      body = new URLSearchParams(body).toString();
+    }
+
+    try {
+      const { statusCode, headers, body: responseBody } = await fastify.fetchRemote(targetUrl, {
+        method: 'POST',
+        headers: req.headers,
+        body
+      });
+
+      // Handle redirects (3xx)
+      if (statusCode >= 300 && statusCode < 400 && headers['location']) {
+        let redirectUrl = headers['location'];
+        try {
+          redirectUrl = new URL(redirectUrl, targetUrl).toString();
+        } catch {}
+        const proxiedLocation = `/proxy?url=${encodeURIComponent(redirectUrl)}`;
+        reply.header('location', proxiedLocation);
+        reply.status(statusCode);
+        return reply.send();
+      }
+
+      if (wantsHtml || headers['content-type']?.includes('text/html')) {
+        const rewritten = await fastify.rewriteHtml(responseBody, targetUrl);
+        reply.header('content-type', 'text/html');
+        return reply.send(rewritten);
+      }
+
+      reply.headers(headers);
+      reply.status(statusCode);
+      return reply.send(responseBody);
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send('Proxy error');

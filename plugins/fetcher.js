@@ -61,14 +61,39 @@ function parseCurlResponse(output, defaultStatus = 200) {
 async function fetcherPlugin(fastify, opts) {
   fastify.decorate('fetchRemote', async (url, options = {}) => {
     try {
-      // Use -i to include headers, and do NOT use --location so redirects are not followed
-      const { stdout } = await execa('curl', [
+      const curlArgs = [
         '--silent',
         '-i',
         '--proxy', 'http://wayback.protoweb.org:7851',
         '--user-agent', 'JSProtoBrowser',
-        url
-      ]);
+      ];
+
+      // Set HTTP method
+      if (options.method && options.method.toUpperCase() !== 'GET') {
+        curlArgs.push('-X', options.method.toUpperCase());
+      }
+
+      // Add headers
+      if (options.headers) {
+        for (const [key, value] of Object.entries(options.headers)) {
+          // Skip headers that curl sets by default (like Host)
+          if (key.toLowerCase() === 'host') continue;
+          curlArgs.push('-H', `${key}: ${value}`);
+        }
+      }
+
+      // Add data for POST/PUT/PATCH
+      let execaOptions = {};
+      if (options.body && options.method && ['POST', 'PUT', 'PATCH'].includes(options.method.toUpperCase())) {
+        curlArgs.push('--data-binary', '@-');
+        execaOptions = { input: options.body };
+      }
+
+      curlArgs.push(url);
+
+      // console.log('[fetchRemote] curl command:', 'curl', curlArgs.map(arg => `'${arg}'`).join(' '));
+
+      const { stdout } = await execa('curl', curlArgs, execaOptions);
 
       const { statusCode, headers, body } = parseCurlResponse(stdout, 200);
       console.log('[fetchRemote] Parsed headers:', headers);
