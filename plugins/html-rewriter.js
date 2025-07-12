@@ -57,7 +57,13 @@ async function htmlRewriterPlugin(fastify, opts) {
       console.log(`[rewriteAttr] ${el.name} [${attr}]: original='${orig}', rewritten='${rewrittenUrl}'`);
     }
 
-    $('a[href]').each((_, el) => rewriteAttr(el, 'href'));
+    $('a[href]').each((_, el) => {
+      // Remove target="_top" if present
+      if ($(el).attr('target') === '_top') {
+        $(el).removeAttr('target');
+      }
+      rewriteAttr(el, 'href');
+    });
     $('link[href]').each((_, el) => rewriteAttr(el, 'href'));
     $('frame[src]').each((_, el) => rewriteAttr(el, 'src'));
     $('form[action]').each((_, el) => {
