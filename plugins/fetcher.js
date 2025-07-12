@@ -87,7 +87,7 @@ async function fetcherPlugin(fastify, opts) {
       if (options.headers) {
         for (const [key, value] of Object.entries(options.headers)) {
           // Skip headers that curl sets by default (like Host)
-          if (key.toLowerCase() === 'host') continue;
+          if (key.toLowerCase() === 'host' || key.toLowerCase() === 'user-agent') continue;
           curlArgs.push('-H', `${key}: ${value}`);
         }
       }
