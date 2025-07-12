@@ -124,6 +124,18 @@ async function htmlRewriterPlugin(fastify, opts) {
       console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}', proxied='${proxiedUrl}'`);
     });
 
+    // Rewrite <bgsound> elements to <audio> with autoplay and controls
+    $('bgsound[src]').each((_, el) => {
+      const $el = $(el);
+      const src = $el.attr('src');
+      if (src) {
+        // Create a new <audio> element
+        const audioHtml = `<audio src="${src}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
+        $el.after(audioHtml);
+        $el.remove();
+      }
+    });
+
     // TODO: move all this junk into real js files or something
     const patchScript = `
   <script>
@@ -383,6 +395,75 @@ async function htmlRewriterPlugin(fastify, opts) {
   <script src="${domainName}/public/ruffle/ruffle.js"></script>
   `;
     $('head').append(patchScript);
+
+    // Detect MIDI files on the page
+    let midiSrc = null;
+    // Check <embed> and <object> tags for .mid or .midi
+    $('embed[src], object[data]').each((_, el) => {
+      const $el = $(el);
+      const attr = el.name === 'embed' ? 'src' : 'data';
+      const src = $el.attr(attr);
+      if (src && /\.mid(i)?(\?.*)?$/i.test(src)) {
+        midiSrc = src;
+      }
+    });
+    // Check <bgsound> for MIDI
+    $('bgsound[src]').each((_, el) => {
+      const $el = $(el);
+      const src = $el.attr('src');
+      if (src && /\.mid(i)?(\?.*)?$/i.test(src)) {
+        midiSrc = src;
+        $el.remove(); // Remove bgsound, MIDI will be handled by player
+      }
+    });
+    // If not MIDI, rewrite <bgsound> to <audio> as before
+    $('bgsound[src]').each((_, el) => {
+      const $el = $(el);
+      const src = $el.attr('src');
+      if (src && !( /\.mid(i)?(\?.*)?$/i.test(src) )) {
+        // Create a new <audio> element
+        const audioHtml = `<audio src="${src}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
+        $el.after(audioHtml);
+        $el.remove();
+      }
+    });
+
+    if (midiSrc) {
+      // Inject MIDI player scripts
+      $('head').append(`
+        <script src="/public/WebAudioFontPlayer.js"></script>
+        <script src="/public/MIDIFile.js"></script>
+        <script src="/public/MIDIPlayer.js"></script>
+      `);
+      // Inject player initialization script with proxied MIDI link
+      $('body').append(`
+        <script>
+        // autoplay flag
+        var autoplay=true;
+        // create the player object using a file input by id or DOM Element
+        var player=new MIDIPlayer('${midiSrc}');
+        // register the onload function to start playing
+        player.onload = function(song){
+            if (autoplay){
+                player.play();
+            }
+        }
+        // the tick event is triggered in every position change
+        player.ontick=function(song,position){
+            var pos= document.getElementById("position");
+            if(pos) pos.value=Math.round(position*10);
+        }
+        // the end event is triggered when the song ends
+        player.onend=function(){
+            player.play();
+        }
+        // stop playing when the window is unfocused
+        window.onblur=function(){
+            player.pause();
+        }
+        </script>
+      `);
+    }
 
     // Special handling for .pls files from shoutcast.com
     if (originalUrl.includes('shoutcast.com') && originalUrl.endsWith('.pls')) {
