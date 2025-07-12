@@ -131,7 +131,7 @@ async function assetProxyPlugin(fastify, opts) {
           }
         }
         
-        reply.header('Content-Type', type?.mime || 'application/octet-stream');
+        reply.header('Content-Type', allHeaders['content-type'] || type?.mime || 'application/octet-stream');
         
         // Set Content-Disposition for downloads only if not already set
         if (!allHeaders['content-disposition']) {
