@@ -31,6 +31,42 @@ async function htmlRewriterPlugin(fastify, opts) {
       }
     }
 
+    // Remove iframe-busting code from inline scripts
+    $('script').each((_, el) => {
+      const $el = $(el);
+      const scriptContent = $el.html();
+      
+      if (scriptContent && (scriptContent.includes('top.location') || scriptContent.includes('window != top'))) {
+        console.log('[iframe protection] Found iframe-busting code in inline script, removing...');
+        
+        // Single regex to catch all iframe-busting patterns
+        const cleanedContent = scriptContent.replace(
+          /if\s*\(\s*(?:window\s*!=\s*top|top\s*!=\s*self)\s*\)\s*\{\s*(?:window\.)?top\.location(?:\.href)?\s*=\s*(?:self\.|window\.)?location(?:\.href)?\s*;\s*\}/g,
+          ''
+        );
+        
+        $el.html(cleanedContent);
+        console.log('[iframe protection] Removed iframe-busting code from inline script');
+      }
+    });
+
+    // Special handling for RuneScape applet tags
+    if (originalUrl.includes('runescape.com') && originalUrl.includes('client.cgi')) {
+      console.log('[RuneScape] Processing RuneScape client page, replacing applet with iframe');
+      
+      $('applet').each((_, el) => {
+        const $el = $(el);
+        console.log('[RuneScape] Found applet tag, replacing with iframe');
+        
+        // Create iframe replacement
+        const iframeHtml = `<iframe src="/public/mudclient177-deob-teavm/index.html#members,game.openrsc.com,43496,65537,7112866275597968156550007489163685737528267584779959617759901583041864787078477876689003422509099353805015177703670715380710894892460637136582066351659813,true" width="765" height="503" style="border: none; display: block; margin: 0 auto;"></iframe>`;
+        
+        // Replace the applet with the iframe
+        $el.replaceWith(iframeHtml);
+        console.log('[RuneScape] Replaced applet with iframe');
+      });
+    }
+
     function rewriteAttr(el, attr) {
       const orig = $(el).attr(attr);
       if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:') || orig.startsWith('mailto:')) return;
