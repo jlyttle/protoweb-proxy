@@ -36,14 +36,24 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:') || orig.startsWith('mailto:')) return;
       const absoluteUrl = new URL(orig, originalUrl).toString();
       let rewrittenUrl;
-      
-      // Check if URL has a file extension (likely an asset)
-      const hasFileExtension = /\.(?:[a-z0-9]{1,5})$/i.test(absoluteUrl);
-      // const isFtpPage = originalUrl.toLowerCase().startsWith('ftp://');
-      
-      if (el.name === 'a' || el.name === 'form' || el.name === 'frame') {
-        // For links, forms, and frames, use /proxy unless it's clearly an asset
-        if (hasFileExtension && !absoluteUrl.includes('?') && !absoluteUrl.includes('#')) {
+
+      if (el.name === 'a' || el.name === 'form' || el.name === 'frame' || el.name === 'area') {
+        // Use /asset only for known asset extensions, otherwise /proxy
+        // Asset extension allowlist
+        const assetExtensions = [
+          'zip', 'exe', 'msi', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz',
+          'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+          'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico',
+          'mp3', 'wav', 'ogg', 'flac', 'aac',
+          'mp4', 'avi', 'mov', 'wmv', 'mkv', 'webm',
+          'swf', 'ttf', 'otf', 'woff', 'woff2', 'eot', 'css', 'js', 'mid', 'midi'
+        ];
+        const urlPath = new URL(absoluteUrl).pathname;
+        const extMatch = urlPath.match(/\.([a-z0-9]{1,5})$/i);
+        const ext = extMatch ? extMatch[1].toLowerCase() : null;
+        const isAsset = ext && assetExtensions.includes(ext);
+
+        if (isAsset && !absoluteUrl.includes('?') && !absoluteUrl.includes('#')) {
           rewrittenUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
         } else {
           rewrittenUrl = domainName + '/proxy?url=' + encodeURIComponent(absoluteUrl);
@@ -65,6 +75,7 @@ async function htmlRewriterPlugin(fastify, opts) {
       rewriteAttr(el, 'href');
     });
     $('link[href]').each((_, el) => rewriteAttr(el, 'href'));
+    $('area[href]').each((_, el) => rewriteAttr(el, 'href'));
     $('frame[src]').each((_, el) => rewriteAttr(el, 'src'));
     $('form[action]').each((_, el) => {
       const $el = $(el);
@@ -111,6 +122,14 @@ async function htmlRewriterPlugin(fastify, opts) {
 
       $el.html(rewrittenCss);
     });
+
+    // ============================================================================
+    // MEDIA HANDLING SECTION
+    // ============================================================================
+    // Unified handling for embed, object, bgsound elements and MIDI detection
+    let midiSrc = null;
+
+    // Process embed and object elements
     $('embed[src], object[data]').each((_, el) => {
       const $el = $(el);
       const attr = el.name === 'embed' ? 'src' : 'data';
@@ -118,25 +137,45 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig) return;
 
       const absoluteUrl = new URL(orig, originalUrl).toString();
-      const proxiedUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
-      $el.attr(attr, proxiedUrl);
-      $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
-      console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}', proxied='${proxiedUrl}'`);
-    });
 
-    // Rewrite <bgsound> elements to <audio> with autoplay and controls
-    $('bgsound[src]').each((_, el) => {
-      const $el = $(el);
-      const src = $el.attr('src');
-      if (src) {
-        // Create a new <audio> element
-        const audioHtml = `<audio src="${src}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
-        $el.after(audioHtml);
-        $el.remove();
+      // Check if this is a MIDI file
+      if (/\.mid(i)?(\?.*)?$/i.test(orig)) {
+        midiSrc = absoluteUrl;
+        console.log(`[MIDI detection] Found MIDI file: ${orig} -> ${absoluteUrl}`);
+      } else {
+        const proxiedUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+        $el.attr(attr, proxiedUrl);
+        $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
+        console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}', proxied='${proxiedUrl}'`);
       }
     });
 
-    // TODO: move all this junk into real js files or something
+    // Process bgsound elements
+    $('bgsound[src]').each((_, el) => {
+      const $el = $(el);
+      const src = $el.attr('src');
+      if (!src) return;
+
+      const absoluteUrl = new URL(src, originalUrl).toString();
+
+      // Check if this is a MIDI file
+      if (/\.mid(i)?(\?.*)?$/i.test(src)) {
+        midiSrc = absoluteUrl;
+        console.log(`[MIDI detection] Found MIDI file in bgsound: ${src} -> ${absoluteUrl}`);
+        $el.remove(); // Remove bgsound, MIDI will be handled by player
+      } else {
+        // For non-MIDI files, convert to audio element
+        const audioHtml = `<audio src="${absoluteUrl}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
+        $el.after(audioHtml);
+        $el.remove();
+        console.log(`[bgsound->audio] Converted: ${src} -> ${absoluteUrl}`);
+      }
+    });
+
+    // ============================================================================
+    // SCRIPT INJECTION SECTION
+    // ============================================================================
+    // Main patch script (Ruffle, fetch, XHR, popup handling, etc.)
     const patchScript = `
   <script>
     window.RufflePlayer = window.RufflePlayer || {};
@@ -396,47 +435,15 @@ async function htmlRewriterPlugin(fastify, opts) {
   `;
     $('head').append(patchScript);
 
-    // Detect MIDI files on the page
-    let midiSrc = null;
-    // Check <embed> and <object> tags for .mid or .midi
-    $('embed[src], object[data]').each((_, el) => {
-      const $el = $(el);
-      const attr = el.name === 'embed' ? 'src' : 'data';
-      const src = $el.attr(attr);
-      if (src && /\.mid(i)?(\?.*)?$/i.test(src)) {
-        midiSrc = src;
-      }
-    });
-    // Check <bgsound> for MIDI
-    $('bgsound[src]').each((_, el) => {
-      const $el = $(el);
-      const src = $el.attr('src');
-      if (src && /\.mid(i)?(\?.*)?$/i.test(src)) {
-        midiSrc = src;
-        $el.remove(); // Remove bgsound, MIDI will be handled by player
-      }
-    });
-    // If not MIDI, rewrite <bgsound> to <audio> as before
-    $('bgsound[src]').each((_, el) => {
-      const $el = $(el);
-      const src = $el.attr('src');
-      if (src && !( /\.mid(i)?(\?.*)?$/i.test(src) )) {
-        // Create a new <audio> element
-        const audioHtml = `<audio src="${src}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
-        $el.after(audioHtml);
-        $el.remove();
-      }
-    });
+    // Additional scripts based on content
+    let additionalScripts = '';
 
+    // MIDI player scripts if MIDI file detected
     if (midiSrc) {
-      // Inject MIDI player scripts
-      $('head').append(`
+      additionalScripts += `
         <script src="/public/WebAudioFontPlayer.js"></script>
         <script src="/public/MIDIFile.js"></script>
         <script src="/public/MIDIPlayer.js"></script>
-      `);
-      // Inject player initialization script with proxied MIDI link
-      $('body').append(`
         <script>
         // autoplay flag
         var autoplay=true;
@@ -462,9 +469,54 @@ async function htmlRewriterPlugin(fastify, opts) {
             player.pause();
         }
         </script>
-      `);
+      `;
     }
 
+    // Document.write patch for dynamic content
+    additionalScripts += `
+      <script>
+        var PROTOWEB_ORIGINAL_URL = "${originalUrl}";
+        (function() {
+          function rewriteMediaSrc(str) {
+            var rewritten = str.replace(/(<(?:embed|bgsound)[^>]*src\\s*=\\s*)(['\\"]?)([^'\\"> ]+)\\2/gi, function(match, prefix, quote, url) {
+              try {
+                var abs = new URL(url, PROTOWEB_ORIGINAL_URL).toString();
+                var proxied = '${domainName}/asset?url=' + encodeURIComponent(abs);
+                console.log('[document.write patch] Rewriting media src:', url, '->', proxied);
+                return prefix + quote + proxied + quote;
+              } catch {
+                return match;
+              }
+            });
+            if (rewritten !== str) {
+              console.log('[document.write patch] Rewrote string:', rewritten);
+            }
+            return rewritten;
+          }
+          var origWrite = document.write.bind(document);
+          document.write = function(str) {
+            console.log('[document.write patch] document.write called with:', str);
+            if (typeof str === 'string') str = rewriteMediaSrc(str);
+            return origWrite(str);
+          };
+          var origWriteln = document.writeln.bind(document);
+          document.writeln = function(str) {
+            console.log('[document.write patch] document.writeln called with:', str);
+            if (typeof str === 'string') str = rewriteMediaSrc(str);
+            return origWriteln(str);
+          };
+        })();
+      </script>
+    `;
+
+    // Inject all additional scripts
+    if (additionalScripts) {
+      $('head').append(additionalScripts);
+    }
+
+    // ============================================================================
+    // SPECIAL CONTENT HANDLING SECTION
+    // ============================================================================
     // Special handling for .pls files from shoutcast.com
     if (originalUrl.includes('shoutcast.com') && originalUrl.endsWith('.pls')) {
       console.log('Redirecting shoutcast playlist to webamp');
@@ -476,11 +528,11 @@ async function htmlRewriterPlugin(fastify, opts) {
         const fileMatch = bodyText.match(/File1=(.+)/);
         if (fileMatch) {
           const streamUrl = fileMatch[1].trim();
-          
+
           // Extract station name from Title1= line if available
           const titleMatch = bodyText.match(/Title1=(.+)/);
           const stationName = titleMatch ? titleMatch[1].trim() : 'Unknown Station';
-          
+
           // Replace the entire body content with our script
           const plsScript = `
     <script>
@@ -496,60 +548,13 @@ async function htmlRewriterPlugin(fastify, opts) {
     </script>
     <p>Loading stream: ${stationName}</p>
     <p>Redirecting back...</p>`;
-          
+
           $('body').html(plsScript);
         }
       }
     }
 
-    // $('head').append('<link rel="stylesheet" href="https://unpkg.com/@sakun/system.css" />');
-    // $('head').append('<link rel="stylesheet" href="https://unpkg.com/98.css@0.1.4/build/98.css" />');
 
-    // Wrap body content
-//     const bodyHtml = $('body').html();
-//     $('body').html(`
-//   <div id="protoweb-outer">
-//     <div id="protoweb-frame">${bodyHtml}</div>
-//   </div>
-// `);
-
-    // Patch document.write and document.writeln to rewrite embed/bgsound src attributes
-    const patchDocumentWriteScript = `
-  <script>
-    var PROTOWEB_ORIGINAL_URL = "${originalUrl}";
-    (function() {
-      function rewriteMediaSrc(str) {
-        var rewritten = str.replace(/(<(?:embed|bgsound)[^>]*src\\s*=\\s*)(['\\"]?)([^'\\"> ]+)\\2/gi, function(match, prefix, quote, url) {
-          try {
-            var abs = new URL(url, PROTOWEB_ORIGINAL_URL).toString();
-            var proxied = '${domainName}/asset?url=' + encodeURIComponent(abs);
-            console.log('[document.write patch] Rewriting media src:', url, '->', proxied);
-            return prefix + quote + proxied + quote;
-          } catch {
-            return match;
-          }
-        });
-        if (rewritten !== str) {
-          console.log('[document.write patch] Rewrote string:', rewritten);
-        }
-        return rewritten;
-      }
-      var origWrite = document.write.bind(document);
-      document.write = function(str) {
-        console.log('[document.write patch] document.write called with:', str);
-        if (typeof str === 'string') str = rewriteMediaSrc(str);
-        return origWrite(str);
-      };
-      var origWriteln = document.writeln.bind(document);
-      document.writeln = function(str) {
-        console.log('[document.write patch] document.writeln called with:', str);
-        if (typeof str === 'string') str = rewriteMediaSrc(str);
-        return origWriteln(str);
-      };
-    })();
-  </script>
-  `;
-    $('head').prepend(patchDocumentWriteScript);
 
     return $.html();
   });
