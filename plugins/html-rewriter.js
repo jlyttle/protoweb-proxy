@@ -128,7 +128,43 @@ async function htmlRewriterPlugin(fastify, opts) {
     // ============================================================================
     // Unified handling for embed, object, bgsound elements and MIDI detection
     let midiSrc = null;
+    let processedAudioFiles = new Set(); // Track processed audio files to avoid conflicts
+    let processedAudioBaseNames = new Set(); // Track base names to detect same content with different extensions
+    
+    // Helper function to get base name without extension
+    const getBaseName = (url) => {
+      const path = new URL(url).pathname;
+      return path.replace(/\.[^.]*$/, '').toLowerCase();
+    };
+    
+    // Process bgsound elements first (they take priority)
+    $('bgsound[src]').each((_, el) => {
+      const $el = $(el);
+      const src = $el.attr('src');
+      if (!src) return;
 
+      const absoluteUrl = new URL(src, originalUrl).toString();
+      
+      // Check if this is a MIDI file
+      if (/\.mid(i)?(\?.*)?$/i.test(src)) {
+        midiSrc = absoluteUrl;
+        console.log(`[MIDI detection] Found MIDI file in bgsound: ${src} -> ${absoluteUrl}`);
+        $el.remove(); // Remove bgsound, MIDI will be handled by player
+      } else {
+        // For non-MIDI files, convert to audio element
+        const proxiedUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+        const audioHtml = `<audio src="${proxiedUrl}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
+        $el.after(audioHtml);
+        $el.remove();
+        console.log(`[bgsound->audio] Converted: ${src} -> ${proxiedUrl}`);
+        
+        // Track this audio file as processed to avoid conflicts with embed fallbacks
+        processedAudioFiles.add(absoluteUrl);
+        processedAudioBaseNames.add(getBaseName(absoluteUrl));
+        console.log(`[audio tracking] Added to processed list: ${getBaseName(absoluteUrl)}`);
+      }
+    });
+    
     // Process embed and object elements
     $('embed[src], object[data]').each((_, el) => {
       const $el = $(el);
@@ -137,38 +173,26 @@ async function htmlRewriterPlugin(fastify, opts) {
       if (!orig) return;
 
       const absoluteUrl = new URL(orig, originalUrl).toString();
-
-      // Check if this is a MIDI file
+      
+      // Check if this is a MIDI file; midi player calls overridden fetch and proxies on request
       if (/\.mid(i)?(\?.*)?$/i.test(orig)) {
         midiSrc = absoluteUrl;
         console.log(`[MIDI detection] Found MIDI file: ${orig} -> ${absoluteUrl}`);
+        $el.remove(); // Remove embed, MIDI will be handled by player
       } else {
-        const proxiedUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
-        $el.attr(attr, proxiedUrl);
-        $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
-        console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}', proxied='${proxiedUrl}'`);
-      }
-    });
-
-    // Process bgsound elements
-    $('bgsound[src]').each((_, el) => {
-      const $el = $(el);
-      const src = $el.attr('src');
-      if (!src) return;
-
-      const absoluteUrl = new URL(src, originalUrl).toString();
-
-      // Check if this is a MIDI file
-      if (/\.mid(i)?(\?.*)?$/i.test(src)) {
-        midiSrc = absoluteUrl;
-        console.log(`[MIDI detection] Found MIDI file in bgsound: ${src} -> ${absoluteUrl}`);
-        $el.remove(); // Remove bgsound, MIDI will be handled by player
-      } else {
-        // For non-MIDI files, convert to audio element
-        const audioHtml = `<audio src="${absoluteUrl}" autoplay controls width="100" height="20" style="display:inline-block; vertical-align:middle; min-width:100px; max-width:120px; height:20px; padding:0; margin:0; background:transparent; border:none;"></audio>`;
-        $el.after(audioHtml);
-        $el.remove();
-        console.log(`[bgsound->audio] Converted: ${src} -> ${absoluteUrl}`);
+        // Check if this is an audio file that was already handled by a bgsound element
+        const isAudioFile = /\.(wav|aif|aiff|mp3|ogg|flac|aac|m4a)(\?.*)?$/i.test(orig);
+        if (isAudioFile && (processedAudioFiles.has(absoluteUrl) || processedAudioBaseNames.has(getBaseName(absoluteUrl)))) {
+          // This is a fallback embed for an audio file already handled by bgsound
+          const baseName = getBaseName(absoluteUrl);
+          console.log(`[embed fallback] Skipping embed fallback for audio already handled by bgsound: ${orig} (base: ${baseName})`);
+          $el.remove(); // Remove the embed element to prevent conflicts
+        } else {
+          const proxiedUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+          $el.attr(attr, proxiedUrl);
+          $el.attr('data-base', absoluteUrl); // <-- Ruffle will use this
+          console.log(`[embed/object] ${el.name} [${attr}]: original='${orig}', absolute='${absoluteUrl}', proxied='${proxiedUrl}'`);
+        }
       }
     });
 
