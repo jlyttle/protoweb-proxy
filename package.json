@@ -14,6 +14,7 @@
   "dependencies": {
     "@fastify/cors": "^11.0.1",
     "@fastify/formbody": "^8.0.2",
+    "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^8.2.0",
     "@sakun/system.css": "^0.1.11",
     "98.css": "^0.1.21",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "jest": "^30.0.3",
     "nodemon": "^3.1.10",
-    "supertest": "^7.1.1"
+    "supertest": "^7.1.1",
+    "tap": "^21.1.0"
   }
 }

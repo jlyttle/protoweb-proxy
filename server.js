@@ -17,6 +17,8 @@ fastify.register(fastifyStatic, {
   prefix: '/public/', // so /public/ruffle/ruffle.js works
 });
 
+// Register rate limiting plugin (should be registered early)
+fastify.register(require('./plugins/rate-limiter'));
 fastify.register(require('./plugins/fetcher'));
 fastify.register(require('./plugins/html-rewriter'));
 fastify.register(require('./plugins/asset-proxy'));
