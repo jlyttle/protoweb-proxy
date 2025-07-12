@@ -103,6 +103,12 @@ async function htmlRewriterPlugin(fastify, opts) {
       console.log(`[rewriteAttr] ${el.name} [${attr}]: original='${orig}', rewritten='${rewrittenUrl}'`);
     }
 
+    // Remove base target="_top" tags that cause iframe breakout
+    $('base[target="_top"]').each((_, el) => {
+      console.log('[iframe protection] Found base target="_top", removing...');
+      $(el).remove();
+    });
+
     $('a[href]').each((_, el) => {
       // Remove target="_top" if present
       if ($(el).attr('target') === '_top') {
