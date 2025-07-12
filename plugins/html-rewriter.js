@@ -70,7 +70,19 @@ async function htmlRewriterPlugin(fastify, opts) {
     function rewriteAttr(el, attr) {
       const orig = $(el).attr(attr);
       if (!orig || orig.startsWith('data:') || orig.startsWith('javascript:') || orig.startsWith('mailto:')) return;
-      const absoluteUrl = new URL(orig, originalUrl).toString();
+      
+      // Handle hash fragments specially to avoid encoding #
+      let absoluteUrl, hashFragment;
+      if (orig.includes('#')) {
+        // Split URL and hash, encode URL separately, then reattach hash
+        const urlObj = new URL(orig, originalUrl);
+        hashFragment = urlObj.hash;
+        urlObj.hash = ''; // Remove hash for encoding
+        absoluteUrl = urlObj.toString();
+      } else {
+        absoluteUrl = new URL(orig, originalUrl).toString();
+      }
+      
       let rewrittenUrl;
 
       if (el.name === 'a' || el.name === 'form' || el.name === 'frame' || el.name === 'area') {
@@ -94,10 +106,22 @@ async function htmlRewriterPlugin(fastify, opts) {
         } else {
           rewrittenUrl = domainName + '/proxy?url=' + encodeURIComponent(absoluteUrl);
         }
+        
+        // Reattach hash fragment if it exists
+        if (hashFragment) {
+          rewrittenUrl += hashFragment;
+        }
+        
         $(el).attr(attr, rewrittenUrl);
       } else {
         // For other elements (img, script, etc.), always use /asset
         rewrittenUrl = domainName + '/asset?url=' + encodeURIComponent(absoluteUrl);
+        
+        // Reattach hash fragment if it exists
+        if (hashFragment) {
+          rewrittenUrl += hashFragment;
+        }
+        
         $(el).attr(attr, rewrittenUrl);
       }
       console.log(`[rewriteAttr] ${el.name} [${attr}]: original='${orig}', rewritten='${rewrittenUrl}'`);
